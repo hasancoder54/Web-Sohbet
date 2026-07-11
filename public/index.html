@@ -149,7 +149,6 @@
             100% { height: 15px; }
         }
 
-        /* Yeni Gelişmiş Teşhis Konsolu Tasarımı */
         .diagnostic-console {
             background-color: #050507;
             border: 1px solid #222226;
@@ -216,10 +215,26 @@
         let allUsers = [];
         let inRoom = false;
         
-        // STUN Sunucu Yapılandırması (Ağ tüneli açmak için kritik öneme sahip)
-        const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+        // Gelişmiş Ağ Yapılandırması: VPN engellerini delmek için açık kaynaklı ücretsiz TURN sunucuları eklendi
+        const rtcConfig = { 
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun.services.mozilla.com' },
+                {
+                    urls: 'turn:openrelay.metered.ca:443',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                },
+                {
+                    urls: 'turn:openrelay.metered.ca:80',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                }
+            ] 
+        };
 
-        // Teşhis Paneline Log Basma Fonksiyonu
         function addLog(message, type = 'info') {
             const now = new Date();
             const timeStr = `[${now.toTimeString().split(' ')[0]}]`;
@@ -238,7 +253,7 @@
         });
 
         socket.on('connect_error', (err) => {
-            addLog(`Soket sunucusuna bağlanılamadı! Sunucu kapalı veya engellenmiş olabilir. Detay: ${err.message}`, 'error');
+            addLog(`Soket sunucusuna bağlanılamadı! Detay: ${err.message}`, 'error');
         });
 
         socket.on('user-list-update', (users) => {
@@ -265,14 +280,14 @@
             } catch (err) {
                 console.error(err);
                 statusDiv.innerText = "Hata: Giriş Başarısız";
-                addLog(`Mikrofon erişim hatası! Donanım bulunamadı veya izin reddedildi: ${err.name} - ${err.message}`, 'error');
+                addLog(`Mikrofon erişim hatası: ${err.name} - ${err.message}`, 'error');
                 joinBtn.disabled = false;
             }
         });
 
         socket.on('user-joined-room', (userId) => {
             if (!inRoom) return;
-            addLog(`Odaya yeni bir katılımcı girdi. ID: ${userId}. WebRTC el sıkışması başlatılıyor (Oluşturucu Rolü)...`, 'info');
+            addLog(`Odaya yeni bir katılımcı girdi: ${userId}. WebRTC el sıkışması başlatılıyor (Oluşturucu Rolü)...`, 'info');
             initiatePeerConnection(userId, true);
         });
 
@@ -340,33 +355,27 @@
         });
 
         function initiatePeerConnection(userId, isInitiator) {
-            addLog(`RTCPeerConnection nesnesi yapılandırılıyor. STUN: Google aktif.`, 'info');
+            addLog(`RTCPeerConnection nesnesi yapılandırılıyor. STUN ve TURN röle hatları aktif.`, 'info');
             const pc = new RTCPeerConnection(rtcConfig);
             peers[userId] = pc;
 
-            // Yerel ses izlerini ekleme teşhisi
             localStream.getTracks().forEach(track => {
                 pc.addTrack(track, localStream);
                 addLog(`Kendi mikrofon ses izimiz (${track.kind}) bağlantı hattına yüklendi.`, 'info');
             });
 
-            // Ağ Adayları Değişim Takibi
             pc.onicecandidate = (event) => {
                 if (event.candidate) {
                     socket.emit('signal', { to: userId, signal: event.candidate });
                 } else {
-                    addLog(`Yerel ağ analizi bitti: Tüm ICE adayları başarıyla toplandı.`, 'info');
+                    addLog(`Yerel ağ analizi bitti: Tüm ICE/TURN röle adayları başarıyla toplandı.`, 'info');
                 }
             };
 
-            // KRİTİK: Bağlantı Durumu Değişiklik İzleyicileri (Sorunun Nerede Olduğunu Söyleyen Ana Mekanizma)
+            // Canlı Durum Takipçileri
             pc.onconnectionstatechange = () => {
                 addLog(`[TEŞHİS] Cihaz (${userId}) ile WebRTC Bağlantı Durumu: ${pc.connectionState.toUpperCase()}`, 
                     pc.connectionState === 'connected' ? 'success' : (pc.connectionState === 'failed' ? 'error' : 'warning'));
-                
-                if(pc.connectionState === 'failed') {
-                    addLog("HATA DETAYI: Güvenlik duvarı veya simetrik NAT/Internet engelinden dolayı tünel kurulamadı! TURN sunucusu gerekebilir.", "error");
-                }
             };
 
             pc.oniceconnectionstatechange = () => {
@@ -374,12 +383,12 @@
             };
 
             pc.onsignalingstatechange = () => {
-                addLog(`[PROTOKOL] Sinyalleşme Durumu Durumu: ${pc.signalingState.toUpperCase()}`, 'info');
+                addLog(`[PROTOKOL] Sinyalleşme Durumu: ${pc.signalingState.toUpperCase()}`, 'info');
             };
 
-            // Ses Akış Kanallarının Yakalanma Teşhisi
+            // Ses Akış Kanalını Bağlama
             pc.ontrack = (event) => {
-                addLog(`Karşı cihazın ham ses verisi (Media Stream Track) yakalandı!`, 'info');
+                addLog(`Karşı cihazın ham ses verisi yakalandı!`, 'info');
                 let remoteAudio = document.getElementById(`audio-${userId}`);
                 if (!remoteAudio) {
                     remoteAudio = document.createElement('audio');
@@ -387,7 +396,6 @@
                     remoteAudio.autoplay = true;
                     remoteAudio.setAttribute('playsinline', 'true');
                     remoteAudiosContainer.appendChild(remoteAudio);
-                    addLog("Ses oynatımı için dinamik görünmez <audio> elementi HTML'e enjekte edildi.", 'info');
                 }
                 
                 if (!remoteAudio.srcObject) {
@@ -398,8 +406,8 @@
                 addLog(`Ses kanalı medya oynatıcısına bağlandı. Oynatım başlatılıyor...`, 'info');
                 
                 remoteAudio.play()
-                    .then(() => addLog(`Görüşme tam kararlılıkla sağlandı! Cihazın (${userId}) sesi şu an hoparlörden çıkıyor olmalı.`, 'success'))
-                    .catch(e => addLog(`Tarayıcı otomatik ses oynatma engeline (Autoplay Policy) takıldı! Kullanıcı ekrana tıklamalı. Detay: ${e.message}`, 'error'));
+                    .then(() => addLog(`Görüşme sağlandı! Sesi duyuyor olmalısınız.`, 'success'))
+                    .catch(e => addLog(`Tarayıcı otomatik ses engeline takıldı! Sayfaya dokunarak aşın: ${e.message}`, 'error'));
             };
 
             if (isInitiator) {
@@ -419,7 +427,7 @@
         async function processIceQueue(userId) {
             const pc = peers[userId];
             if (iceQueues[userId] && pc) {
-                addLog(`Kuyrukta bekleyen toplam ${iceQueues[userId].length} adet ağ adresi (ICE) eritiliyor...`, 'info');
+                addLog(`Kuyrukta bekleyen toplam ${iceQueues[userId].length} adet ağ adresi eritiliyor...`, 'info');
                 while (iceQueues[userId].length > 0) {
                     const candidate = iceQueues[userId].shift();
                     await pc.addIceCandidate(candidate).catch(e => console.log(e));
