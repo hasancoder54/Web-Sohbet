@@ -3,118 +3,361 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Minimal Sesli Görüşme</title>
+    <title>Siber Ses Paneli</title>
     <style>
+        :root {
+            --bg-color: #0a0a0c;
+            --panel-bg: #111115;
+            --accent-color: #00f5d4;
+            --text-main: #f4f4f6;
+            --text-muted: #71717a;
+        }
         body {
-            font-family: sans-serif;
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 40px 20px;
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
-            height: 100vh;
-            background: #121212;
-            color: white;
-            margin: 0;
+        }
+        .container {
+            width: 100%;
+            max-width: 600px;
+        }
+        header {
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        h1 {
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.05em;
+            margin: 0 0 8px 0;
+            color: var(--text-main);
+        }
+        #status {
+            font-size: 14px;
+            color: var(--accent-color);
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+        }
+        .control-panel {
+            background: var(--panel-bg);
+            border: 1px solid #222226;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+            text-align: center;
         }
         button {
-            padding: 12px 24px;
-            font-size: 16px;
-            background: #00adb5;
+            background-color: var(--accent-color);
+            color: #000;
             border: none;
-            color: white;
+            padding: 14px 28px;
+            font-size: 15px;
+            font-weight: 600;
+            border-radius: 8px;
             cursor: pointer;
-            border-radius: 5px;
-            margin-top: 10px;
+            transition: all 0.2s ease;
         }
-        #status { color: #888; margin-top: 5px; }
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(0, 245, 212, 0.3);
+        }
+        button:disabled {
+            background-color: var(--text-muted);
+            color: var(--bg-color);
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        .device-section-title {
+            font-size: 14px;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            font-weight: 500;
+        }
+        .device-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .device-card {
+            background: var(--panel-bg);
+            border: 1px solid #1f1f24;
+            border-radius: 8px;
+            padding: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            transition: border 0.2s ease;
+        }
+        .device-card.connected {
+            border-color: rgba(0, 245, 212, 0.2);
+        }
+        .device-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .device-avatar {
+            width: 8px;
+            height: 8px;
+            background-color: var(--text-muted);
+            border-radius: 50%;
+        }
+        .device-card.connected .device-avatar {
+            background-color: var(--accent-color);
+        }
+        .device-name {
+            font-size: 15px;
+            font-weight: 500;
+        }
+        /* Ses Animasyon İkonu */
+        .audio-icon {
+            display: flex;
+            align-items: flex-end;
+            gap: 3px;
+            width: 20px;
+            height: 15px;
+            visibility: hidden;
+        }
+        .audio-bar {
+            width: 3px;
+            height: 3px;
+            background-color: var(--accent-color);
+            border-radius: 1px;
+            transition: height 0.1s ease;
+        }
+        /* Konuşma algılandığında aktif olacak class */
+        .talking .audio-icon {
+            visibility: visible;
+        }
+        .talking .audio-bar:nth-child(1) { animation: bounce 0.5s ease infinite alternate; }
+        .talking .audio-bar:nth-child(2) { animation: bounce 0.4s ease infinite alternate 0.1s; }
+        .talking .audio-bar:nth-child(3) { animation: bounce 0.6s ease infinite alternate 0.2s; }
+
+        @keyframes bounce {
+            0% { height: 3px; }
+            100% { height: 15px; }
+        }
+        #remoteAudios { display: none; }
     </style>
     <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
 
-    <h1>Sesli Görüşme Odası</h1>
-    <div id="status">Sunucuya bağlanılıyor...</div>
-    <button id="startBtn">Odaya Katıl (Sesleri Başlat)</button>
+    <div class="container">
+        <header>
+            <h1>Siber Ses İstasyonu</h1>
+            <div id="status">Ağ Bağlantısı Kuruluyor...</div>
+        </header>
 
-    <audio id="remoteAudio" autoplay></audio>
+        <div class="control-panel">
+            <button id="joinBtn">Ses Sistemini Başlat ve Odaya Gir</button>
+        </div>
+
+        <div class="device-section-title">Aktif Cihazlar ve Bağlantı Durumları</div>
+        <div class="device-list" id="deviceList">
+            </div>
+    </div>
+
+    <div id="remoteAudios"></div>
 
     <script>
         const socket = io();
-        const startBtn = document.getElementById('startBtn');
+        const joinBtn = document.getElementById('joinBtn');
         const statusDiv = document.getElementById('status');
-        const remoteAudio = document.getElementById('remoteAudio');
-        
+        const deviceListDiv = document.getElementById('deviceList');
+        const remoteAudiosContainer = document.getElementById('remoteAudios');
+
         let localStream;
-        let peerConnection;
-        const consts = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }; // Ücretsiz Google STUN sunucusu
-        const roomId = "ortak-oda-1"; // Test için sabit bir oda adı
+        let peers = {};
+        let allUsers = [];
+        let inRoom = false;
+        const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
         socket.on('connect', () => {
-            statusDiv.innerText = "Sunucuya bağlandı. Odaya katılmaya hazır.";
+            statusDiv.innerText = "Sistem Çevrimiçi";
         });
 
-        startBtn.addEventListener('click', async () => {
-            startBtn.disabled = true;
-            statusDiv.innerText = "Mikrofon izni isteniyor...";
+        // Tüm aktif kullanıcı listesi güncellendiğinde tetiklenir
+        socket.on('user-list-update', (users) => {
+            allUsers = users;
+            renderDeviceList();
+        });
+
+        // Mikrofonu aç ve odaya resmi olarak katıl
+        joinBtn.addEventListener('click', async () => {
+            joinBtn.disabled = true;
+            statusDiv.innerText = "Mikrofon doğrulanıyor...";
 
             try {
-                // 1. Kullanıcının mikrofonunu alıyoruz
                 localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-                statusDiv.innerText = "Mikrofon aktif. Odaya giriliyor...";
-
-                // Sunucuya odaya girdiğimizi söylüyoruz
-                socket.emit('join-room', roomId);
+                statusDiv.innerText = "Ses Odasına Giriş Yapıldı";
+                inRoom = true;
+                
+                socket.emit('join-room');
+                renderDeviceList();
+                setupAudioAnalysis(localStream);
             } catch (err) {
-                statusDiv.innerText = "Mikrofon izni reddedildi veya hata oluştu!";
-                startBtn.disabled = false;
+                console.error(err);
+                statusDiv.innerText = "Hata: Mikrofon Erişimi Reddedildi!";
+                joinBtn.disabled = false;
             }
         });
 
-        // Odada olan diğer kullanıcı bizimle bağlantı kurmak istediğinde
-        socket.on('user-connected', async (userId) => {
-            statusDiv.innerText = "Diğer kullanıcıya bağlanılıyor...";
-            createPeerConnection(userId);
-            
-            // Teklif (Offer) oluşturup karşı tarafa gönderiyoruz
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
-            socket.emit('signal', { to: userId, signal: offer });
+        // Odaya yeni biri girdiğinde ona WebRTC teklifi (Offer) gönderiyoruz
+        socket.on('user-joined-room', (userId) => {
+            if (!inRoom) return;
+            initiatePeerConnection(userId, true);
         });
 
-        // Karşı taraftan sinyal (Offer/Answer/ICE Candidate) geldiğinde
+        // Gelen WebRTC sinyalleşme paketlerini işleme
         socket.on('signal', async (data) => {
-            if (!peerConnection) createPeerConnection(data.from);
+            if (!inRoom) return;
+            const { from, signal } = data;
 
-            if (data.signal.type === 'offer') {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.signal));
-                const answer = await peerConnection.createAnswer();
-                await peerConnection.setLocalDescription(answer);
-                socket.emit('signal', { to: data.from, signal: answer });
-            } else if (data.signal.type === 'answer') {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.signal));
-            } else if (data.signal.candidate) {
-                await peerConnection.addIceCandidate(new RTCIceCandidate(data.signal));
+            if (!peers[from]) {
+                initiatePeerConnection(from, false);
+            }
+
+            const pc = peers[from];
+            if (signal.type === 'offer') {
+                await pc.setRemoteDescription(new RTCSessionDescription(signal));
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                socket.emit('signal', { to: from, signal: answer });
+            } else if (signal.type === 'answer') {
+                await pc.setRemoteDescription(new RTCSessionDescription(signal));
+            } else if (signal.candidate) {
+                await pc.addIceCandidate(new RTCIceCandidate(signal)).catch(e => console.log(e));
             }
         });
 
-        function createPeerConnection(userId) {
-            peerConnection = new RTCPeerConnection(consts);
+        // Bir cihaz sekmesini kapattığında veya ayrıldığında
+        socket.on('user-left-room', (userId) => {
+            if (peers[userId]) {
+                peers[userId].close();
+                delete peers[userId];
+            }
+            const remoteAudio = document.getElementById(`audio-${userId}`);
+            if (remoteAudio) remoteAudio.remove();
+        });
 
-            // Kendi sesimizi bağlantıya ekliyoruz
-            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+        // Başka bir cihazın konuşma durum animasyonunu güncelleme
+        socket.on('user-speaking-state', (data) => {
+            const card = document.getElementById(`user-card-${data.id}`);
+            if (card) {
+                if (data.isSpeaking) card.classList.add('talking');
+                else card.classList.remove('talking');
+            }
+        });
 
-            // Karşı tarafın sesi geldiğinde audio elementine bağlıyoruz
-            peerConnection.ontrack = (event) => {
-                remoteAudio.srcObject = event.streams[0];
-                statusDiv.innerText = "Görüşme sağlandı! Ses iletiliyor.";
-            };
+        // Çoklu peer bağlantı yönetim fonksiyonu
+        function initiatePeerConnection(userId, isInitiator) {
+            const pc = new RTCPeerConnection(rtcConfig);
+            peers[userId] = pc;
 
-            // Ağ yapılandırma adaylarını (ICE) karşı tarafa uçuruyoruz
-            peerConnection.onicecandidate = (event) => {
+            // Kendi ses izimizi karşıya yüklüyoruz
+            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+            pc.onicecandidate = (event) => {
                 if (event.candidate) {
                     socket.emit('signal', { to: userId, signal: event.candidate });
                 }
             };
+
+            // Karşı cihazın sesi ulaştığında dinamik audio elementi yarat (Tarayıcı engellemesini çözer)
+            pc.ontrack = (event) => {
+                let remoteAudio = document.getElementById(`audio-${userId}`);
+                if (!remoteAudio) {
+                    remoteAudio = document.createElement('audio');
+                    remoteAudio.id = `audio-${userId}`;
+                    remoteAudio.autoplay = true;
+                    remoteAudio.controls = false;
+                    remoteAudiosContainer.appendChild(remoteAudio);
+                }
+                remoteAudio.srcObject = event.streams[0];
+                // Tarayıcı autoplay politikalarını kesin olarak delmek için tetikleme
+                remoteAudio.play().catch(e => console.log("Oynatma politikası tetiklendi:", e));
+            };
+
+            if (isInitiator) {
+                pc.onnegotiationneeded = async () => {
+                    const offer = await pc.createOffer();
+                    await pc.setLocalDescription(offer);
+                    socket.emit('signal', { to: userId, signal: offer });
+                };
+            }
+        }
+
+        // Cihaz listesini ekrana basma ve durumları işleme
+        function renderDeviceList() {
+            deviceListDiv.innerHTML = "";
+            allUsers.forEach(user => {
+                const isMe = user.id === socket.id;
+                const isConnectedToMe = peers[user.id] || isMe;
+
+                const card = document.createElement('div');
+                card.className = `device-card ${isConnectedToMe && inRoom ? 'connected' : ''}`;
+                card.id = `user-card-${user.id}`;
+
+                card.innerHTML = `
+                    <div class="device-info">
+                        <div class="device-avatar"></div>
+                        <div class="device-name">${user.name} ${isMe ? '(Sen)' : ''}</div>
+                    </div>
+                    <div class="audio-icon">
+                        <div class="audio-bar"></div>
+                        <div class="audio-bar"></div>
+                        <div class="audio-bar"></div>
+                    </div>
+                `;
+                deviceListDiv.appendChild(card);
+            });
+        }
+
+        // Mikrofon ses seviyesini ölçen ve animasyonu tetikleyen fonksiyon
+        function setupAudioAnalysis(stream) {
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioContext.createMediaStreamSource(stream);
+            const analyser = audioContext.createAnalyser();
+            analyser.fftSize = 512;
+            source.connect(analyser);
+
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+
+            let lastSpeakingState = false;
+
+            function checkVolume() {
+                analyser.getByteFrequencyData(dataArray);
+                let sum = 0;
+                for (let i = 0; i < bufferLength; i++) {
+                    sum += dataArray[i];
+                }
+                let average = sum / bufferLength;
+
+                // Belirli bir eşik değerinin (Konuşma algısı) üzeri
+                let isSpeaking = average > 12; 
+
+                if (isSpeaking !== lastSpeakingState) {
+                    lastSpeakingState = isSpeaking;
+                    const myCard = document.getElementById(`user-card-${socket.id}`);
+                    if (myCard) {
+                        if (isSpeaking) myCard.classList.add('talking');
+                        else myCard.classList.remove('talking');
+                    }
+                    // Sunucuya konuşma durumumuzu fırlatıyoruz ki diğerleri de ikonumuzu oynatsın
+                    socket.emit('speaking-state', isSpeaking);
+                }
+                requestAnimationFrame(checkVolume);
+            }
+            checkVolume();
         }
     </script>
 </body>
