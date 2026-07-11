@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Siber Ses Paneli + Teşhis Sistemi</title>
+    <title>Siber Görüntülü Görüşme İstasyonu</title>
     <style>
         :root {
             --bg-color: #0a0a0c;
@@ -27,7 +27,7 @@
         }
         .container {
             width: 100%;
-            max-width: 600px;
+            max-width: 700px;
         }
         header {
             margin-bottom: 30px;
@@ -85,6 +85,43 @@
             text-transform: uppercase;
             letter-spacing: 0.03em;
         }
+        
+        /* Gelişmiş Görüntü Izgarası */
+        .video-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+            width: 100%;
+        }
+        .video-container {
+            position: relative;
+            background: #000;
+            border: 1px solid #1f1f24;
+            border-radius: 10px;
+            overflow: hidden;
+            aspect-ratio: 4/3;
+        }
+        .video-container.my-video {
+            border-color: var(--accent-color);
+        }
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background-color: #000;
+        }
+        .video-label {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 4px 8px;
+            font-size: 12px;
+            border-radius: 4px;
+            font-weight: 500;
+        }
+
         .device-list {
             display: flex;
             flex-direction: column;
@@ -173,8 +210,6 @@
         .log-success { color: var(--success-color); font-weight: 600; }
         .log-warning { color: var(--warning-color); }
         .log-error { color: var(--error-color); font-weight: 600; }
-
-        #remoteAudios { display: none; }
     </style>
     <script src="/socket.io/socket.io.js"></script>
 </head>
@@ -182,12 +217,20 @@
 
     <div class="container">
         <header>
-            <h1>Siber Ses İstasyonu</h1>
+            <h1>Siber Görüntülü Görüşme İstasyonu</h1>
             <div id="status">Sinyal Alınıyor...</div>
         </header>
 
         <div class="control-panel">
-            <button id="joinBtn">Ses Sistemini Başlat ve Odaya Gir</button>
+            <button id="joinBtn">Kamera & Mikrofonu Başlat ve Odaya Gir</button>
+        </div>
+
+        <div class="section-title">Canlı Görüntü Akışları</div>
+        <div class="video-grid" id="videoGrid">
+            <div class="video-container my-video" id="localVideoContainer" style="display: none;">
+                <video id="localVideo" autoplay playsinline muted></video>
+                <div class="video-label">Sen (Yerel Cihaz)</div>
+            </div>
         </div>
 
         <div class="section-title">Aktif Cihazlar ve Bağlantı Durumları</div>
@@ -199,14 +242,14 @@
         </div>
     </div>
 
-    <div id="remoteAudios"></div>
-
     <script>
         const socket = io();
         const joinBtn = document.getElementById('joinBtn');
         const statusDiv = document.getElementById('status');
         const deviceListDiv = document.getElementById('deviceList');
-        const remoteAudiosContainer = document.getElementById('remoteAudios');
+        const videoGrid = document.getElementById('videoGrid');
+        const localVideoContainer = document.getElementById('localVideoContainer');
+        const localVideo = document.getElementById('localVideo');
         const diagnosticConsole = document.getElementById('diagnosticConsole');
 
         let localStream;
@@ -215,7 +258,7 @@
         let allUsers = [];
         let inRoom = false;
         
-        // Gelişmiş Ağ Yapılandırması: VPN engellerini delmek için açık kaynaklı ücretsiz TURN sunucuları eklendi
+        // VPN engellerini aşacak ücretsiz TURN sunucu yapılandırması
         const rtcConfig = { 
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
@@ -249,45 +292,50 @@
 
         socket.on('connect', () => {
             statusDiv.innerText = "Sistem Çevrimiçi";
-            addLog(`Merkezi soket sunucusuna bağlanıldı. Atanan Benzersiz ID: ${socket.id}`, 'success');
+            addLog(`Soket sunucusuna bağlanıldı. Atanan ID: ${socket.id}`, 'success');
         });
 
         socket.on('connect_error', (err) => {
-            addLog(`Soket sunucusuna bağlanılamadı! Detay: ${err.message}`, 'error');
+            addLog(`Soket bağlantı hatası: ${err.message}`, 'error');
         });
 
         socket.on('user-list-update', (users) => {
             allUsers = users;
-            addLog(`Aktif cihaz listesi güncellendi. Toplam cihaz sayısı: ${users.length}`, 'info');
+            addLog(`Aktif cihaz listesi güncellendi. Mevcut cihaz: ${users.length}`, 'info');
             renderDeviceList();
         });
 
         joinBtn.addEventListener('click', async () => {
             joinBtn.disabled = true;
-            statusDiv.innerText = "Mikrofon doğrulanıyor...";
-            addLog("Mikrofon donanım erişim isteği tarayıcıya gönderildi...", 'info');
+            statusDiv.innerText = "Donanımlar doğrulanıyor...";
+            addLog("Kamera ve Mikrofon donanım erişim isteği tarayıcıya iletildi...", 'info');
 
             try {
-                localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-                statusDiv.innerText = "Ses Odasına Giriş Yapıldı";
-                addLog("Mikrofon erişimi başarıyla onaylandı. Ses dalgaları yakalanıyor.", 'success');
+                // KRİTİK DEĞİŞİKLİK: Hem ses hem de video akışını aktif ediyoruz
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+                statusDiv.innerText = "Görüntülü Odaya Giriş Yapıldı";
+                addLog("Kamera ve Mikrofon erişimi başarıyla onaylandı.", 'success');
+                
+                // Yerel kamerayı ekrana basıyoruz
+                localVideo.srcObject = localStream;
+                localVideoContainer.style.display = "block";
                 inRoom = true;
                 
                 socket.emit('join-room');
-                addLog("Sunucuya 'join-room' (odaya katılma) sinyali gönderildi.", 'info');
+                addLog("Sunucuya 'join-room' sinyali fırlatıldı.", 'info');
                 renderDeviceList();
                 setupAudioAnalysis(localStream);
             } catch (err) {
                 console.error(err);
-                statusDiv.innerText = "Hata: Giriş Başarısız";
-                addLog(`Mikrofon erişim hatası: ${err.name} - ${err.message}`, 'error');
+                statusDiv.innerText = "Hata: Donanım Erişilemedi";
+                addLog(`Medya erişim hatası: Kameronız kapalı veya izin verilmedi. Detay: ${err.message}`, 'error');
                 joinBtn.disabled = false;
             }
         });
 
         socket.on('user-joined-room', (userId) => {
             if (!inRoom) return;
-            addLog(`Odaya yeni bir katılımcı girdi: ${userId}. WebRTC el sıkışması başlatılıyor (Oluşturucu Rolü)...`, 'info');
+            addLog(`Odaya yeni bir katılımcı girdi: ${userId}. Görüntülü WebRTC el sıkışması başlatılıyor...`, 'info');
             initiatePeerConnection(userId, true);
         });
 
@@ -296,53 +344,54 @@
             const { from, signal } = data;
 
             if (!peers[from]) {
-                addLog(`Cihazdan (${from}) ilk sinyal alındı. Alıcı rolünde WebRTC nesnesi kuruluyor...`, 'info');
+                addLog(`Cihazdan (${from}) ilk sinyal paketi alındı. WebRTC boru hattı kuruluyor...`, 'info');
                 initiatePeerConnection(from, false);
             }
 
             const pc = peers[from];
 
             if (signal.type === 'offer') {
-                addLog(`Cihazdan (${from}) SDP Teklifi (Offer) alındı. Uzak ağ tanımı işleniyor...`, 'info');
+                addLog(`Cihazdan (${from}) SDP Teklifi alındı. Uzak hat kaydediliyor...`, 'info');
                 await pc.setRemoteDescription(new RTCSessionDescription(signal))
-                    .then(() => addLog(`SDP Teklifi (${from}) başarıyla kaydedildi.`, 'success'))
-                    .catch(e => addLog(`SDP Teklifi kaydetme hatası: ${e.message}`, 'error'));
+                    .then(() => addLog(`SDP Teklifi (${from}) kaydedildi.`, 'success'))
+                    .catch(e => addLog(`SDP Teklif hatası: ${e.message}`, 'error'));
 
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
                 socket.emit('signal', { to: from, signal: answer });
-                addLog(`Cihazın teklifine karşılık SDP Cevabı (Answer) üretildi ve gönderildi.`, 'info');
+                addLog(`Cihaza SDP Cevabı üretilip gönderildi.`, 'info');
                 processIceQueue(from);
 
             } else if (signal.type === 'answer') {
-                addLog(`Gönderdiğimiz teklife karşılık cihazdan (${from}) SDP Cevabı (Answer) alındı. İşleniyor...`, 'info');
+                addLog(`Gönderdiğimiz teklife cihazdan (${from}) cevap alındı. İşleniyor...`, 'info');
                 await pc.setRemoteDescription(new RTCSessionDescription(signal))
-                    .then(() => addLog(`Cevap SDP verisi (${from}) başarıyla sisteme işlendi.`, 'success'))
-                    .catch(e => addLog(`Cevap SDP işleme hatası: ${e.message}`, 'error'));
+                    .then(() => addLog(`Cevap SDP verisi (${from}) işlendi.`, 'success'))
+                    .catch(e => addLog(`Cevap SDP hatası: ${e.message}`, 'error'));
                 processIceQueue(from);
 
             } else if (signal.candidate) {
                 const iceCandidate = new RTCIceCandidate(signal);
                 if (pc.remoteDescription && pc.remoteDescription.type) {
                     await pc.addIceCandidate(iceCandidate)
-                        .catch(e => addLog(`Anlık ICE adresi ekleme hatası: ${e.message}`, 'warning'));
+                        .catch(e => addLog(`Anlık ağ adresi ekleme hatası: ${e.message}`, 'warning'));
                 } else {
                     if (!iceQueues[from]) iceQueues[from] = [];
                     iceQueues[from].push(iceCandidate);
-                    addLog(`Erken gelen ağ adresi (ICE Candidate) el sıkışma bitene kadar kuyruğa alındı.`, 'info');
+                    addLog(`Erken gelen ağ adresi (ICE) el sıkışma bitene kadar kuyruğa alındı.`, 'info');
                 }
             }
         });
 
         socket.on('user-left-room', (userId) => {
-            addLog(`Cihaz (${userId}) odadan ayrıldı. Atanan ağ kaynakları temizleniyor.`, 'warning');
+            addLog(`Cihaz (${userId}) odadan çıktı. Görüntü kutusu kaldırılıyor.`, 'warning');
             if (peers[userId]) {
                 peers[userId].close();
                 delete peers[userId];
             }
             if (iceQueues[userId]) delete iceQueues[userId];
-            const remoteAudio = document.getElementById(`audio-${userId}`);
-            if (remoteAudio) remoteAudio.remove();
+            
+            const remoteVideoCont = document.getElementById(`cont-${userId}`);
+            if (remoteVideoCont) remoteVideoCont.remove();
             renderDeviceList();
         });
 
@@ -355,13 +404,14 @@
         });
 
         function initiatePeerConnection(userId, isInitiator) {
-            addLog(`RTCPeerConnection nesnesi yapılandırılıyor. STUN ve TURN röle hatları aktif.`, 'info');
+            addLog(`RTCPeerConnection nesnesi yapılandırılıyor. Görüntü + Ses kanalları açılıyor.`, 'info');
             const pc = new RTCPeerConnection(rtcConfig);
             peers[userId] = pc;
 
+            // Kendi hem ses hem video izlerimizi (tracks) karşı tarafa gönderiyoruz
             localStream.getTracks().forEach(track => {
                 pc.addTrack(track, localStream);
-                addLog(`Kendi mikrofon ses izimiz (${track.kind}) bağlantı hattına yüklendi.`, 'info');
+                addLog(`Kendi medya izimiz (${track.kind.toUpperCase()}) bağlantı hattına yüklendi.`, 'info');
             });
 
             pc.onicecandidate = (event) => {
@@ -372,9 +422,8 @@
                 }
             };
 
-            // Canlı Durum Takipçileri
             pc.onconnectionstatechange = () => {
-                addLog(`[TEŞHİS] Cihaz (${userId}) ile WebRTC Bağlantı Durumu: ${pc.connectionState.toUpperCase()}`, 
+                addLog(`[TEŞHİS] Cihaz (${userId}) Bağlantı Durumu: ${pc.connectionState.toUpperCase()}`, 
                     pc.connectionState === 'connected' ? 'success' : (pc.connectionState === 'failed' ? 'error' : 'warning'));
             };
 
@@ -382,38 +431,52 @@
                 addLog(`[AĞ DURUMU] ICE Bağlantı Durumu: ${pc.iceConnectionState.toUpperCase()}`, 'info');
             };
 
-            pc.onsignalingstatechange = () => {
-                addLog(`[PROTOKOL] Sinyalleşme Durumu: ${pc.signalingState.toUpperCase()}`, 'info');
-            };
-
-            // Ses Akış Kanalını Bağlama
+            // Karşı tarafın hem sesi hem görüntüsü ulaştığında tetiklenir
             pc.ontrack = (event) => {
-                addLog(`Karşı cihazın ham ses verisi yakalandı!`, 'info');
-                let remoteAudio = document.getElementById(`audio-${userId}`);
-                if (!remoteAudio) {
-                    remoteAudio = document.createElement('audio');
-                    remoteAudio.id = `audio-${userId}`;
-                    remoteAudio.autoplay = true;
-                    remoteAudio.setAttribute('playsinline', 'true');
-                    remoteAudiosContainer.appendChild(remoteAudio);
+                addLog(`Karşı cihazın ham medya izi (${event.track.kind.toUpperCase()}) yakalandı!`, 'info');
+                
+                let remoteVideoCont = document.getElementById(`cont-${userId}`);
+                let remoteVideo = document.getElementById(`video-${userId}`);
+                
+                if (!remoteVideoCont) {
+                    remoteVideoCont = document.createElement('div');
+                    remoteVideoCont.className = 'video-container';
+                    remoteVideoCont.id = `cont-${userId}`;
+                    
+                    remoteVideo = document.createElement('video');
+                    remoteVideo.id = `video-${userId}`;
+                    remoteVideo.autoplay = true;
+                    remoteVideo.setAttribute('playsinline', 'true');
+                    
+                    const label = document.createElement('div');
+                    label.className = 'video-label';
+                    // Cihaz ismini bulup etikete yazıyoruz
+                    const foundUser = allUsers.find(u => u.id === userId);
+                    label.innerText = foundUser ? foundUser.name : "Uzak Cihaz";
+                    
+                    remoteVideoCont.appendChild(remoteVideo);
+                    remoteVideoCont.appendChild(label);
+                    videoGrid.appendChild(remoteVideoCont);
+                    
+                    addLog("Görüntü oynatımı için dinamik <video> bileşeni ızgaraya yerleştirildi.", 'info');
                 }
                 
-                if (!remoteAudio.srcObject) {
-                    remoteAudio.srcObject = new MediaStream();
+                if (!remoteVideo.srcObject) {
+                    remoteVideo.srcObject = new MediaStream();
                 }
                 
-                remoteAudio.srcObject.addTrack(event.track);
-                addLog(`Ses kanalı medya oynatıcısına bağlandı. Oynatım başlatılıyor...`, 'info');
+                // Gelen ham medya izini (ses veya video) medya nesnesine gömüyoruz
+                remoteVideo.srcObject.addTrack(event.track);
                 
-                remoteAudio.play()
-                    .then(() => addLog(`Görüşme sağlandı! Sesi duyuyor olmalısınız.`, 'success'))
-                    .catch(e => addLog(`Tarayıcı otomatik ses engeline takıldı! Sayfaya dokunarak aşın: ${e.message}`, 'error'));
+                remoteVideo.play()
+                    .then(() => addLog(`Görüntülü akış başarıyla bağlandı! Medya oynatılıyor.`, 'success'))
+                    .catch(e => addLog(`Tarayıcı otomatik oynatma engeline takıldı: ${e.message}`, 'error'));
             };
 
             if (isInitiator) {
                 pc.onnegotiationneeded = async () => {
                     try {
-                        addLog("Ağ hattı değişimi algılandı, yeni SDP Teklifi (Offer) üretiliyor...", 'info');
+                        addLog("Medya hattı değişimi algılandı, yeni SDP Teklifi üretiliyor...", 'info');
                         const offer = await pc.createOffer();
                         await pc.setLocalDescription(offer);
                         socket.emit('signal', { to: userId, signal: offer });
@@ -427,7 +490,7 @@
         async function processIceQueue(userId) {
             const pc = peers[userId];
             if (iceQueues[userId] && pc) {
-                addLog(`Kuyrukta bekleyen toplam ${iceQueues[userId].length} adet ağ adresi eritiliyor...`, 'info');
+                addLog(`Kuyruktan toplam ${iceQueues[userId].length} adet ağ adresi eritiliyor...`, 'info');
                 while (iceQueues[userId].length > 0) {
                     const candidate = iceQueues[userId].shift();
                     await pc.addIceCandidate(candidate).catch(e => console.log(e));
