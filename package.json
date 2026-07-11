@@ -1,7 +1,7 @@
 {
-  "name": "render-sesli-gorusme",
+  "name": "render-görüntülü-gorusme",
   "version": "1.0.0",
-  "description": "Render üzerinde çalışan p2p sesli arama uygulaması",
+  "description": "Render üzerinde çalışan p2p görüntülü arama uygulaması",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
