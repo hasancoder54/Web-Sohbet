@@ -2,44 +2,53 @@
 const express = require('express');
 const app = express();
 const http = require('http').createServer(app);
-const io = require('socket.io')(http, {
-    cors: { origin: "*" }
-});
+const io = require('socket.io')(http, { cors: { origin: "*" } });
 const path = require('path');
 
 const PORT = process.env.PORT || 3000;
 
-// public klasöründeki HTML ve JS dosyalarını dışarıya açıyoruz
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Odaları ve kullanıcıları tutmak için basit bir obje
-const rooms = {};
+// Aktif kullanıcıları ve cihaz bilgilerini tutan obje
+const activeUsers = {};
 
 io.on('connection', (socket) => {
-    console.log('Bir kullanıcı bağlandı:', socket.id);
+    // Rastgele bir cihaz/kullanıcı ismi atıyoruz
+    const deviceName = "Cihaz-" + socket.id.substring(0, 5).toUpperCase();
+    activeUsers[socket.id] = { id: socket.id, name: deviceName };
 
-    // Kullanıcı bir odaya katılmak istediğinde
-    socket.on('join-room', (roomId) => {
-        socket.join(roomId);
-        
-        // Odada halihazırda başka biri varsa onu yeni gelene bildiriyoruz (WebRTC Sinyalleşmesi)
-        socket.to(roomId).emit('user-connected', socket.id);
+    console.log(`${deviceName} bağlandı.`);
 
-        socket.on('disconnect', () => {
-            socket.to(roomId).emit('user-disconnected', socket.id);
-            console.log('Kullanıcı ayrıldı:', socket.id);
+    // Her yeni bağlantıda güncel kullanıcı listesini herkese gönder
+    io.emit('user-list-update', Object.values(activeUsers));
+
+    // Sesli odaya katılma isteği
+    socket.on('join-room', () => {
+        socket.broadcast.emit('user-joined-room', socket.id);
+    });
+
+    // WebRTC Sinyal verilerinin (Offer, Answer, ICE) hedef cihaza iletilmesi
+    socket.on('signal', (data) => {
+        io.to(data.to).emit('signal', {
+            from: socket.id,
+            signal: data.signal
         });
+    });
 
-        // WebRTC teklif ve cevaplarını (SDP) diğer kullanıcıya aktarma basamağı
-        socket.on('signal', (data) => {
-            io.to(data.to).emit('signal', {
-                from: socket.id,
-                signal: data.signal
-            });
-        });
+    // Kullanıcı konuşma durumunu değiştirdiğinde arayüz simgesi için yayınla
+    socket.on('speaking-state', (isSpeaking) => {
+        socket.broadcast.emit('user-speaking-state', { id: socket.id, isSpeaking });
+    });
+
+    socket.on('disconnect', () => {
+        console.log(`${activeUsers[socket.id]?.name} ayrıldı.`);
+        delete activeUsers[socket.id];
+        // Ayrılan kişiyi listeden düşmek için güncel listeyi fırlat
+        io.emit('user-list-update', Object.values(activeUsers));
+        io.emit('user-left-room', socket.id);
     });
 });
 
 http.listen(PORT, () => {
-    console.log(`Sunucu ${PORT} portunda çalışıyor...`);
+    console.log(`Sunucu ${PORT} portunda aktif.`);
 });
