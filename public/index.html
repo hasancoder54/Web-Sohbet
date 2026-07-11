@@ -116,7 +116,6 @@
             font-size: 15px;
             font-weight: 500;
         }
-        /* Ses Animasyon İkonu */
         .audio-icon {
             display: flex;
             align-items: flex-end;
@@ -132,7 +131,6 @@
             border-radius: 1px;
             transition: height 0.1s ease;
         }
-        /* Konuşma algılandığında aktif olacak class */
         .talking .audio-icon {
             visibility: visible;
         }
@@ -161,8 +159,7 @@
         </div>
 
         <div class="device-section-title">Aktif Cihazlar ve Bağlantı Durumları</div>
-        <div class="device-list" id="deviceList">
-            </div>
+        <div class="device-list" id="deviceList"></div>
     </div>
 
     <div id="remoteAudios"></div>
@@ -176,6 +173,7 @@
 
         let localStream;
         let peers = {};
+        let iceQueues = {}; // Erken gelen ICE adaylarını saklamak için kuyruk mekanizması
         let allUsers = [];
         let inRoom = false;
         const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
@@ -184,13 +182,11 @@
             statusDiv.innerText = "Sistem Çevrimiçi";
         });
 
-        // Tüm aktif kullanıcı listesi güncellendiğinde tetiklenir
         socket.on('user-list-update', (users) => {
             allUsers = users;
             renderDeviceList();
         });
 
-        // Mikrofonu aç ve odaya resmi olarak katıl
         joinBtn.addEventListener('click', async () => {
             joinBtn.disabled = true;
             statusDiv.innerText = "Mikrofon doğrulanıyor...";
@@ -210,13 +206,11 @@
             }
         });
 
-        // Odaya yeni biri girdiğinde ona WebRTC teklifi (Offer) gönderiyoruz
         socket.on('user-joined-room', (userId) => {
             if (!inRoom) return;
             initiatePeerConnection(userId, true);
         });
 
-        // Gelen WebRTC sinyalleşme paketlerini işleme
         socket.on('signal', async (data) => {
             if (!inRoom) return;
             const { from, signal } = data;
@@ -226,29 +220,44 @@
             }
 
             const pc = peers[from];
+
             if (signal.type === 'offer') {
                 await pc.setRemoteDescription(new RTCSessionDescription(signal));
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
                 socket.emit('signal', { to: from, signal: answer });
+                
+                // SDP eşleşmesi bittiği için biriken ICE adaylarını işleme alıyoruz
+                processIceQueue(from);
+
             } else if (signal.type === 'answer') {
                 await pc.setRemoteDescription(new RTCSessionDescription(signal));
+                // SDP eşleşmesi bittiği için biriken ICE adaylarını işleme alıyoruz
+                processIceQueue(from);
+
             } else if (signal.candidate) {
-                await pc.addIceCandidate(new RTCIceCandidate(signal)).catch(e => console.log(e));
+                const iceCandidate = new RTCIceCandidate(signal);
+                // Eğer el sıkışma henüz bitmediyse adayı kuyruğa at, bittiyse direkt ekle
+                if (pc.remoteDescription && pc.remoteDescription.type) {
+                    await pc.addIceCandidate(iceCandidate).catch(e => console.log("ICE Ekleme Hatası:", e));
+                } else {
+                    if (!iceQueues[from]) iceQueues[from] = [];
+                    iceQueues[from].push(iceCandidate);
+                }
             }
         });
 
-        // Bir cihaz sekmesini kapattığında veya ayrıldığında
         socket.on('user-left-room', (userId) => {
             if (peers[userId]) {
                 peers[userId].close();
                 delete peers[userId];
             }
+            if (iceQueues[userId]) delete iceQueues[userId];
             const remoteAudio = document.getElementById(`audio-${userId}`);
             if (remoteAudio) remoteAudio.remove();
+            renderDeviceList();
         });
 
-        // Başka bir cihazın konuşma durum animasyonunu güncelleme
         socket.on('user-speaking-state', (data) => {
             const card = document.getElementById(`user-card-${data.id}`);
             if (card) {
@@ -257,12 +266,10 @@
             }
         });
 
-        // Çoklu peer bağlantı yönetim fonksiyonu
         function initiatePeerConnection(userId, isInitiator) {
             const pc = new RTCPeerConnection(rtcConfig);
             peers[userId] = pc;
 
-            // Kendi ses izimizi karşıya yüklüyoruz
             localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
             pc.onicecandidate = (event) => {
@@ -271,31 +278,53 @@
                 }
             };
 
-            // Karşı cihazın sesi ulaştığında dinamik audio elementi yarat (Tarayıcı engellemesini çözer)
+            // Güvenli ve dinamik ses kanalı bağlama (Yeni MediaStream mimarisi)
             pc.ontrack = (event) => {
                 let remoteAudio = document.getElementById(`audio-${userId}`);
                 if (!remoteAudio) {
                     remoteAudio = document.createElement('audio');
                     remoteAudio.id = `audio-${userId}`;
                     remoteAudio.autoplay = true;
-                    remoteAudio.controls = false;
+                    remoteAudio.setAttribute('playsinline', 'true');
                     remoteAudiosContainer.appendChild(remoteAudio);
                 }
-                remoteAudio.srcObject = event.streams[0];
-                // Tarayıcı autoplay politikalarını kesin olarak delmek için tetikleme
-                remoteAudio.play().catch(e => console.log("Oynatma politikası tetiklendi:", e));
+                
+                if (!remoteAudio.srcObject) {
+                    remoteAudio.srcObject = new MediaStream();
+                }
+                
+                // Gelen ham ses izini doğrudan medya oynatıcısına enjekte ediyoruz
+                remoteAudio.srcObject.addTrack(event.track);
+                
+                remoteAudio.play().catch(e => {
+                    console.log("Tarayıcı engeli tetiklendi, etkileşim bekleniyor.", e);
+                });
             };
 
             if (isInitiator) {
                 pc.onnegotiationneeded = async () => {
-                    const offer = await pc.createOffer();
-                    await pc.setLocalDescription(offer);
-                    socket.emit('signal', { to: userId, signal: offer });
+                    try {
+                        const offer = await pc.createOffer();
+                        await pc.setLocalDescription(offer);
+                        socket.emit('signal', { to: userId, signal: offer });
+                    } catch (err) {
+                        console.error("Offer oluşturma hatası:", err);
+                    }
                 };
             }
         }
 
-        // Cihaz listesini ekrana basma ve durumları işleme
+        // SDP tamamlandığında bekleyen ağ paketlerini eriten yardımcı fonksiyon
+        async function processIceQueue(userId) {
+            const pc = peers[userId];
+            if (iceQueues[userId] && pc) {
+                while (iceQueues[userId].length > 0) {
+                    const candidate = iceQueues[userId].shift();
+                    await pc.addIceCandidate(candidate).catch(e => console.log("Kuyruktan ICE ekleme hatası:", e));
+                }
+            }
+        }
+
         function renderDeviceList() {
             deviceListDiv.innerHTML = "";
             allUsers.forEach(user => {
@@ -321,7 +350,6 @@
             });
         }
 
-        // Mikrofon ses seviyesini ölçen ve animasyonu tetikleyen fonksiyon
         function setupAudioAnalysis(stream) {
             const audioContext = new (window.AudioContext || window.webkitAudioContext)();
             const source = audioContext.createMediaStreamSource(stream);
@@ -341,8 +369,6 @@
                     sum += dataArray[i];
                 }
                 let average = sum / bufferLength;
-
-                // Belirli bir eşik değerinin (Konuşma algısı) üzeri
                 let isSpeaking = average > 12; 
 
                 if (isSpeaking !== lastSpeakingState) {
@@ -352,7 +378,6 @@
                         if (isSpeaking) myCard.classList.add('talking');
                         else myCard.classList.remove('talking');
                     }
-                    // Sunucuya konuşma durumumuzu fırlatıyoruz ki diğerleri de ikonumuzu oynatsın
                     socket.emit('speaking-state', isSpeaking);
                 }
                 requestAnimationFrame(checkVolume);
