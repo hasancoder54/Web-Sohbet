@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minimal Sesli Görüşme</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background: #121212;
+            color: white;
+            margin: 0;
+        }
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            background: #00adb5;
+            border: none;
+            color: white;
+            cursor: pointer;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+        #status { color: #888; margin-top: 5px; }
+    </style>
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+
+    <h1>Sesli Görüşme Odası</h1>
+    <div id="status">Sunucuya bağlanılıyor...</div>
+    <button id="startBtn">Odaya Katıl (Sesleri Başlat)</button>
+
+    <audio id="remoteAudio" autoplay></audio>
+
+    <script>
+        const socket = io();
+        const startBtn = document.getElementById('startBtn');
+        const statusDiv = document.getElementById('status');
+        const remoteAudio = document.getElementById('remoteAudio');
+        
+        let localStream;
+        let peerConnection;
+        const consts = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }; // Ücretsiz Google STUN sunucusu
+        const roomId = "ortak-oda-1"; // Test için sabit bir oda adı
+
+        socket.on('connect', () => {
+            statusDiv.innerText = "Sunucuya bağlandı. Odaya katılmaya hazır.";
+        });
+
+        startBtn.addEventListener('click', async () => {
+            startBtn.disabled = true;
+            statusDiv.innerText = "Mikrofon izni isteniyor...";
+
+            try {
+                // 1. Kullanıcının mikrofonunu alıyoruz
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                statusDiv.innerText = "Mikrofon aktif. Odaya giriliyor...";
+
+                // Sunucuya odaya girdiğimizi söylüyoruz
+                socket.emit('join-room', roomId);
+            } catch (err) {
+                statusDiv.innerText = "Mikrofon izni reddedildi veya hata oluştu!";
+                startBtn.disabled = false;
+            }
+        });
+
+        // Odada olan diğer kullanıcı bizimle bağlantı kurmak istediğinde
+        socket.on('user-connected', async (userId) => {
+            statusDiv.innerText = "Diğer kullanıcıya bağlanılıyor...";
+            createPeerConnection(userId);
+            
+            // Teklif (Offer) oluşturup karşı tarafa gönderiyoruz
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            socket.emit('signal', { to: userId, signal: offer });
+        });
+
+        // Karşı taraftan sinyal (Offer/Answer/ICE Candidate) geldiğinde
+        socket.on('signal', async (data) => {
+            if (!peerConnection) createPeerConnection(data.from);
+
+            if (data.signal.type === 'offer') {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.signal));
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                socket.emit('signal', { to: data.from, signal: answer });
+            } else if (data.signal.type === 'answer') {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.signal));
+            } else if (data.signal.candidate) {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(data.signal));
+            }
+        });
+
+        function createPeerConnection(userId) {
+            peerConnection = new RTCPeerConnection(consts);
+
+            // Kendi sesimizi bağlantıya ekliyoruz
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+            // Karşı tarafın sesi geldiğinde audio elementine bağlıyoruz
+            peerConnection.ontrack = (event) => {
+                remoteAudio.srcObject = event.streams[0];
+                statusDiv.innerText = "Görüşme sağlandı! Ses iletiliyor.";
+            };
+
+            // Ağ yapılandırma adaylarını (ICE) karşı tarafa uçuruyoruz
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('signal', { to: userId, signal: event.candidate });
+                }
+            };
+        }
+    </script>
+</body>
+</html>

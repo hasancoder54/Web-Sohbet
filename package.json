@@ -1,0 +1,13 @@
+{
+  "name": "render-sesli-gorusme",
+  "version": "1.0.0",
+  "description": "Render üzerinde çalışan p2p sesli arama uygulaması",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
+}
