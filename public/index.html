@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Siber Ses Paneli</title>
+    <title>Siber Ses Paneli + Teşhis Sistemi</title>
     <style>
         :root {
             --bg-color: #0a0a0c;
@@ -11,6 +11,9 @@
             --accent-color: #00f5d4;
             --text-main: #f4f4f6;
             --text-muted: #71717a;
+            --error-color: #ef4444;
+            --warning-color: #f59e0b;
+            --success-color: #10b981;
         }
         body {
             font-family: system-ui, -apple-system, sans-serif;
@@ -74,16 +77,19 @@
             transform: none;
             box-shadow: none;
         }
-        .device-section-title {
+        .section-title {
             font-size: 14px;
             color: var(--text-muted);
             margin-bottom: 12px;
             font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
         }
         .device-list {
             display: flex;
             flex-direction: column;
             gap: 12px;
+            margin-bottom: 24px;
         }
         .device-card {
             background: var(--panel-bg);
@@ -142,6 +148,33 @@
             0% { height: 3px; }
             100% { height: 15px; }
         }
+
+        /* Yeni Gelişmiş Teşhis Konsolu Tasarımı */
+        .diagnostic-console {
+            background-color: #050507;
+            border: 1px solid #222226;
+            border-radius: 8px;
+            padding: 14px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 12px;
+            max-height: 250px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            box-shadow: inset 0 2px 8px rgba(0,0,0,0.8);
+        }
+        .log-line {
+            margin: 0;
+            line-height: 1.5;
+            word-break: break-all;
+        }
+        .log-time { color: #52525b; margin-right: 6px; }
+        .log-info { color: #a1a1aa; }
+        .log-success { color: var(--success-color); font-weight: 600; }
+        .log-warning { color: var(--warning-color); }
+        .log-error { color: var(--error-color); font-weight: 600; }
+
         #remoteAudios { display: none; }
     </style>
     <script src="/socket.io/socket.io.js"></script>
@@ -151,15 +184,20 @@
     <div class="container">
         <header>
             <h1>Siber Ses İstasyonu</h1>
-            <div id="status">Ağ Bağlantısı Kuruluyor...</div>
+            <div id="status">Sinyal Alınıyor...</div>
         </header>
 
         <div class="control-panel">
             <button id="joinBtn">Ses Sistemini Başlat ve Odaya Gir</button>
         </div>
 
-        <div class="device-section-title">Aktif Cihazlar ve Bağlantı Durumları</div>
+        <div class="section-title">Aktif Cihazlar ve Bağlantı Durumları</div>
         <div class="device-list" id="deviceList"></div>
+
+        <div class="section-title">Canlı Sistem Teşhis Günlüğü (Aşırı Detaylı)</div>
+        <div class="diagnostic-console" id="diagnosticConsole">
+            <p class="log-line log-info"><span class="log-time">[00:00:00]</span>Teşhis sistemi aktif. Olaylar bekleniyor...</p>
+        </div>
     </div>
 
     <div id="remoteAudios"></div>
@@ -170,44 +208,71 @@
         const statusDiv = document.getElementById('status');
         const deviceListDiv = document.getElementById('deviceList');
         const remoteAudiosContainer = document.getElementById('remoteAudios');
+        const diagnosticConsole = document.getElementById('diagnosticConsole');
 
         let localStream;
         let peers = {};
-        let iceQueues = {}; // Erken gelen ICE adaylarını saklamak için kuyruk mekanizması
+        let iceQueues = {};
         let allUsers = [];
         let inRoom = false;
+        
+        // STUN Sunucu Yapılandırması (Ağ tüneli açmak için kritik öneme sahip)
         const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+        // Teşhis Paneline Log Basma Fonksiyonu
+        function addLog(message, type = 'info') {
+            const now = new Date();
+            const timeStr = `[${now.toTimeString().split(' ')[0]}]`;
+            
+            const p = document.createElement('p');
+            p.className = `log-line log-${type}`;
+            p.innerHTML = `<span class="log-time">${timeStr}</span>${message}`;
+            
+            diagnosticConsole.appendChild(p);
+            diagnosticConsole.scrollTop = diagnosticConsole.scrollHeight;
+        }
 
         socket.on('connect', () => {
             statusDiv.innerText = "Sistem Çevrimiçi";
+            addLog(`Merkezi soket sunucusuna bağlanıldı. Atanan Benzersiz ID: ${socket.id}`, 'success');
+        });
+
+        socket.on('connect_error', (err) => {
+            addLog(`Soket sunucusuna bağlanılamadı! Sunucu kapalı veya engellenmiş olabilir. Detay: ${err.message}`, 'error');
         });
 
         socket.on('user-list-update', (users) => {
             allUsers = users;
+            addLog(`Aktif cihaz listesi güncellendi. Toplam cihaz sayısı: ${users.length}`, 'info');
             renderDeviceList();
         });
 
         joinBtn.addEventListener('click', async () => {
             joinBtn.disabled = true;
             statusDiv.innerText = "Mikrofon doğrulanıyor...";
+            addLog("Mikrofon donanım erişim isteği tarayıcıya gönderildi...", 'info');
 
             try {
                 localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                 statusDiv.innerText = "Ses Odasına Giriş Yapıldı";
+                addLog("Mikrofon erişimi başarıyla onaylandı. Ses dalgaları yakalanıyor.", 'success');
                 inRoom = true;
                 
                 socket.emit('join-room');
+                addLog("Sunucuya 'join-room' (odaya katılma) sinyali gönderildi.", 'info');
                 renderDeviceList();
                 setupAudioAnalysis(localStream);
             } catch (err) {
                 console.error(err);
-                statusDiv.innerText = "Hata: Mikrofon Erişimi Reddedildi!";
+                statusDiv.innerText = "Hata: Giriş Başarısız";
+                addLog(`Mikrofon erişim hatası! Donanım bulunamadı veya izin reddedildi: ${err.name} - ${err.message}`, 'error');
                 joinBtn.disabled = false;
             }
         });
 
         socket.on('user-joined-room', (userId) => {
             if (!inRoom) return;
+            addLog(`Odaya yeni bir katılımcı girdi. ID: ${userId}. WebRTC el sıkışması başlatılıyor (Oluşturucu Rolü)...`, 'info');
             initiatePeerConnection(userId, true);
         });
 
@@ -216,38 +281,46 @@
             const { from, signal } = data;
 
             if (!peers[from]) {
+                addLog(`Cihazdan (${from}) ilk sinyal alındı. Alıcı rolünde WebRTC nesnesi kuruluyor...`, 'info');
                 initiatePeerConnection(from, false);
             }
 
             const pc = peers[from];
 
             if (signal.type === 'offer') {
-                await pc.setRemoteDescription(new RTCSessionDescription(signal));
+                addLog(`Cihazdan (${from}) SDP Teklifi (Offer) alındı. Uzak ağ tanımı işleniyor...`, 'info');
+                await pc.setRemoteDescription(new RTCSessionDescription(signal))
+                    .then(() => addLog(`SDP Teklifi (${from}) başarıyla kaydedildi.`, 'success'))
+                    .catch(e => addLog(`SDP Teklifi kaydetme hatası: ${e.message}`, 'error'));
+
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
                 socket.emit('signal', { to: from, signal: answer });
-                
-                // SDP eşleşmesi bittiği için biriken ICE adaylarını işleme alıyoruz
+                addLog(`Cihazın teklifine karşılık SDP Cevabı (Answer) üretildi ve gönderildi.`, 'info');
                 processIceQueue(from);
 
             } else if (signal.type === 'answer') {
-                await pc.setRemoteDescription(new RTCSessionDescription(signal));
-                // SDP eşleşmesi bittiği için biriken ICE adaylarını işleme alıyoruz
+                addLog(`Gönderdiğimiz teklife karşılık cihazdan (${from}) SDP Cevabı (Answer) alındı. İşleniyor...`, 'info');
+                await pc.setRemoteDescription(new RTCSessionDescription(signal))
+                    .then(() => addLog(`Cevap SDP verisi (${from}) başarıyla sisteme işlendi.`, 'success'))
+                    .catch(e => addLog(`Cevap SDP işleme hatası: ${e.message}`, 'error'));
                 processIceQueue(from);
 
             } else if (signal.candidate) {
                 const iceCandidate = new RTCIceCandidate(signal);
-                // Eğer el sıkışma henüz bitmediyse adayı kuyruğa at, bittiyse direkt ekle
                 if (pc.remoteDescription && pc.remoteDescription.type) {
-                    await pc.addIceCandidate(iceCandidate).catch(e => console.log("ICE Ekleme Hatası:", e));
+                    await pc.addIceCandidate(iceCandidate)
+                        .catch(e => addLog(`Anlık ICE adresi ekleme hatası: ${e.message}`, 'warning'));
                 } else {
                     if (!iceQueues[from]) iceQueues[from] = [];
                     iceQueues[from].push(iceCandidate);
+                    addLog(`Erken gelen ağ adresi (ICE Candidate) el sıkışma bitene kadar kuyruğa alındı.`, 'info');
                 }
             }
         });
 
         socket.on('user-left-room', (userId) => {
+            addLog(`Cihaz (${userId}) odadan ayrıldı. Atanan ağ kaynakları temizleniyor.`, 'warning');
             if (peers[userId]) {
                 peers[userId].close();
                 delete peers[userId];
@@ -267,19 +340,46 @@
         });
 
         function initiatePeerConnection(userId, isInitiator) {
+            addLog(`RTCPeerConnection nesnesi yapılandırılıyor. STUN: Google aktif.`, 'info');
             const pc = new RTCPeerConnection(rtcConfig);
             peers[userId] = pc;
 
-            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+            // Yerel ses izlerini ekleme teşhisi
+            localStream.getTracks().forEach(track => {
+                pc.addTrack(track, localStream);
+                addLog(`Kendi mikrofon ses izimiz (${track.kind}) bağlantı hattına yüklendi.`, 'info');
+            });
 
+            // Ağ Adayları Değişim Takibi
             pc.onicecandidate = (event) => {
                 if (event.candidate) {
                     socket.emit('signal', { to: userId, signal: event.candidate });
+                } else {
+                    addLog(`Yerel ağ analizi bitti: Tüm ICE adayları başarıyla toplandı.`, 'info');
                 }
             };
 
-            // Güvenli ve dinamik ses kanalı bağlama (Yeni MediaStream mimarisi)
+            // KRİTİK: Bağlantı Durumu Değişiklik İzleyicileri (Sorunun Nerede Olduğunu Söyleyen Ana Mekanizma)
+            pc.onconnectionstatechange = () => {
+                addLog(`[TEŞHİS] Cihaz (${userId}) ile WebRTC Bağlantı Durumu: ${pc.connectionState.toUpperCase()}`, 
+                    pc.connectionState === 'connected' ? 'success' : (pc.connectionState === 'failed' ? 'error' : 'warning'));
+                
+                if(pc.connectionState === 'failed') {
+                    addLog("HATA DETAYI: Güvenlik duvarı veya simetrik NAT/Internet engelinden dolayı tünel kurulamadı! TURN sunucusu gerekebilir.", "error");
+                }
+            };
+
+            pc.oniceconnectionstatechange = () => {
+                addLog(`[AĞ DURUMU] ICE Bağlantı Durumu: ${pc.iceConnectionState.toUpperCase()}`, 'info');
+            };
+
+            pc.onsignalingstatechange = () => {
+                addLog(`[PROTOKOL] Sinyalleşme Durumu Durumu: ${pc.signalingState.toUpperCase()}`, 'info');
+            };
+
+            // Ses Akış Kanallarının Yakalanma Teşhisi
             pc.ontrack = (event) => {
+                addLog(`Karşı cihazın ham ses verisi (Media Stream Track) yakalandı!`, 'info');
                 let remoteAudio = document.getElementById(`audio-${userId}`);
                 if (!remoteAudio) {
                     remoteAudio = document.createElement('audio');
@@ -287,40 +387,42 @@
                     remoteAudio.autoplay = true;
                     remoteAudio.setAttribute('playsinline', 'true');
                     remoteAudiosContainer.appendChild(remoteAudio);
+                    addLog("Ses oynatımı için dinamik görünmez <audio> elementi HTML'e enjekte edildi.", 'info');
                 }
                 
                 if (!remoteAudio.srcObject) {
                     remoteAudio.srcObject = new MediaStream();
                 }
                 
-                // Gelen ham ses izini doğrudan medya oynatıcısına enjekte ediyoruz
                 remoteAudio.srcObject.addTrack(event.track);
+                addLog(`Ses kanalı medya oynatıcısına bağlandı. Oynatım başlatılıyor...`, 'info');
                 
-                remoteAudio.play().catch(e => {
-                    console.log("Tarayıcı engeli tetiklendi, etkileşim bekleniyor.", e);
-                });
+                remoteAudio.play()
+                    .then(() => addLog(`Görüşme tam kararlılıkla sağlandı! Cihazın (${userId}) sesi şu an hoparlörden çıkıyor olmalı.`, 'success'))
+                    .catch(e => addLog(`Tarayıcı otomatik ses oynatma engeline (Autoplay Policy) takıldı! Kullanıcı ekrana tıklamalı. Detay: ${e.message}`, 'error'));
             };
 
             if (isInitiator) {
                 pc.onnegotiationneeded = async () => {
                     try {
+                        addLog("Ağ hattı değişimi algılandı, yeni SDP Teklifi (Offer) üretiliyor...", 'info');
                         const offer = await pc.createOffer();
                         await pc.setLocalDescription(offer);
                         socket.emit('signal', { to: userId, signal: offer });
                     } catch (err) {
-                        console.error("Offer oluşturma hatası:", err);
+                        addLog(`SDP Teklif üretim esnasında iç hata: ${err.message}`, 'error');
                     }
                 };
             }
         }
 
-        // SDP tamamlandığında bekleyen ağ paketlerini eriten yardımcı fonksiyon
         async function processIceQueue(userId) {
             const pc = peers[userId];
             if (iceQueues[userId] && pc) {
+                addLog(`Kuyrukta bekleyen toplam ${iceQueues[userId].length} adet ağ adresi (ICE) eritiliyor...`, 'info');
                 while (iceQueues[userId].length > 0) {
                     const candidate = iceQueues[userId].shift();
-                    await pc.addIceCandidate(candidate).catch(e => console.log("Kuyruktan ICE ekleme hatası:", e));
+                    await pc.addIceCandidate(candidate).catch(e => console.log(e));
                 }
             }
         }
