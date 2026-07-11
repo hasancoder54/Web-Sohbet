@@ -22,7 +22,7 @@ io.on('connection', (socket) => {
     // Her yeni bağlantıda güncel kullanıcı listesini herkese gönder
     io.emit('user-list-update', Object.values(activeUsers));
 
-    // Sesli odaya katılma isteği
+    // Sesli/Görüntülü odaya katılma isteği
     socket.on('join-room', () => {
         socket.broadcast.emit('user-joined-room', socket.id);
     });
